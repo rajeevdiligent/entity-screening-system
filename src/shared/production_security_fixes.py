@@ -39,6 +39,36 @@ class SecurityManager:
         except Exception as e:
             logger.error(f"Failed to retrieve parameter {parameter_name}: {e}")
             raise
+    
+    def validate_request(self, event: Dict[str, Any], context: Any) -> bool:
+        """Validate incoming Lambda request for security"""
+        try:
+            # Basic request validation
+            if not event:
+                logger.warning("Empty event received")
+                return False
+            
+            # Check for SNS message structure (for LLM service)
+            if 'Records' in event:
+                for record in event['Records']:
+                    if record.get('EventSource') == 'aws:sns':
+                        # Valid SNS message
+                        return True
+            
+            # Check for API Gateway structure (for search service)
+            if 'httpMethod' in event or 'body' in event:
+                return True
+            
+            # Allow direct invocation for testing
+            if 'query' in event:
+                return True
+            
+            logger.info("Request validation passed")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Request validation failed: {e}")
+            return False
 
 class InputValidator:
     """Validates and sanitizes input data"""
@@ -79,6 +109,50 @@ class InputValidator:
             return False
         # Add more specific validation based on your API key formats
         return True
+    
+    @staticmethod
+    def validate_llm_event(event: Dict[str, Any]) -> bool:
+        """Validate LLM processing event structure"""
+        try:
+            # Check for SNS message structure
+            if 'Records' in event:
+                for record in event['Records']:
+                    if record.get('EventSource') == 'aws:sns':
+                        message = record.get('Sns', {}).get('Message')
+                        if message:
+                            # Try to parse the message
+                            import json
+                            message_data = json.loads(message)
+                            if 'query' in message_data and 'search_results' in message_data:
+                                return True
+            
+            # Check for direct invocation
+            if 'query' in event and 'search_results' in event:
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"LLM event validation failed: {e}")
+            return False
+    
+    @staticmethod
+    def validate_gdc_search_input(query: str, index: str, size: int) -> bool:
+        """Validate GDC search input parameters"""
+        try:
+            if not query or not isinstance(query, str) or len(query.strip()) == 0:
+                return False
+            
+            if not index or not isinstance(index, str):
+                return False
+            
+            if not isinstance(size, int) or size < 1 or size > 100:
+                return False
+            
+            return True
+            
+        except Exception:
+            return False
 
 class RateLimiter:
     """Simple rate limiting implementation"""

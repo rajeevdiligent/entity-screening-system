@@ -67,6 +67,14 @@ class CloudWatchMetrics:
         self.put_metric('LLMProcessingTime', processing_time, 'Seconds', dimensions)
         if success:
             self.put_metric('LLMRelevanceScore', relevance_score, 'None', dimensions)
+    
+    def increment_counter(self, metric_name: str, dimensions: Dict[str, str] = None):
+        """Increment a counter metric by 1"""
+        self.put_metric(metric_name, 1, 'Count', dimensions)
+    
+    def record_custom_metric(self, metric_name: str, value: float, unit: str = 'Count', dimensions: Dict[str, str] = None):
+        """Record a custom metric with specified value and unit"""
+        self.put_metric(metric_name, value, unit, dimensions)
 
 class HealthChecker:
     """Health check implementation for Lambda functions"""
