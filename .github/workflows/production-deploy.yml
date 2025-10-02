@@ -1,0 +1,416 @@
+name: Production Deployment Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  AWS_REGION: us-east-1
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  security-scan:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install security tools
+      run: |
+        pip install bandit safety semgrep
+    
+    - name: Run Bandit security scan
+      run: |
+        bandit -r . -f json -o bandit-report.json || true
+        bandit -r . --severity-level medium
+    
+    - name: Run Safety check for vulnerabilities
+      run: |
+        safety check --json --output safety-report.json || true
+        safety check
+    
+    - name: Run Semgrep security scan
+      run: |
+        semgrep --config=auto --json --output=semgrep-report.json . || true
+        semgrep --config=auto .
+    
+    - name: Upload security reports
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          safety-report.json
+          semgrep-report.json
+
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    needs: security-scan
+    
+    services:
+      localstack:
+        image: localstack/localstack:latest
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: dynamodb,sns,secretsmanager,ssm
+          DEBUG: 1
+          DATA_DIR: /tmp/localstack/data
+        options: >-
+          --health-cmd "curl -f http://localhost:4566/_localstack/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 3
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r config/requirements-production.txt
+        pip install pytest pytest-cov moto[all] requests-mock
+    
+    - name: Set up test environment
+      run: |
+        export AWS_ACCESS_KEY_ID=test
+        export AWS_SECRET_ACCESS_KEY=test
+        export AWS_DEFAULT_REGION=us-east-1
+        export LOCALSTACK_ENDPOINT=http://localhost:4566
+    
+    - name: Run unit tests
+      run: |
+        python -m pytest src/tests/test_suite.py -v --cov=src --cov-report=xml --cov-report=html
+      env:
+        AWS_ACCESS_KEY_ID: test
+        AWS_SECRET_ACCESS_KEY: test
+        AWS_DEFAULT_REGION: us-east-1
+        LOCALSTACK_ENDPOINT: http://localhost:4566
+    
+    - name: Upload test coverage
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results
+        path: |
+          coverage.xml
+          htmlcov/
+
+  lint-and-format:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install linting tools
+      run: |
+        pip install black flake8 mypy isort
+    
+    - name: Check code formatting with Black
+      run: |
+        black --check --diff .
+    
+    - name: Check import sorting with isort
+      run: |
+        isort --check-only --diff .
+    
+    - name: Lint with flake8
+      run: |
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+    
+    - name: Type checking with mypy
+      run: |
+        mypy . --ignore-missing-imports || true
+
+  build-and-package:
+    name: Build and Package
+    runs-on: ubuntu-latest
+    needs: [test, lint-and-format]
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Create deployment packages
+      run: |
+        # Create Lambda deployment packages
+        mkdir -p dist/lambda-packages
+        
+        # Package search service
+        cd dist/lambda-packages
+        mkdir search-service
+        cp ../../src/lambda/lambda_search_service_secure.py search-service/lambda_function.py
+        cp ../../src/shared/dynamodb_data_service.py search-service/
+        cp ../../src/shared/production_security_fixes.py search-service/
+        cp ../../src/shared/production_monitoring.py search-service/
+        cd search-service && zip -r ../search-service.zip . && cd ..
+        
+        # Package LLM service
+        mkdir llm-service
+        cp ../../src/lambda/lambda_llm_service.py llm-service/lambda_function.py
+        cp ../../src/shared/dynamodb_data_service.py llm-service/
+        cp ../../src/shared/production_security_fixes.py llm-service/
+        cp ../../src/shared/production_monitoring.py llm-service/
+        cd llm-service && zip -r ../llm-service.zip . && cd ..
+        
+        # Package results service
+        mkdir results-service
+        cp ../../src/lambda/lambda_results_service.py results-service/lambda_function.py
+        cp ../../src/shared/dynamodb_data_service.py results-service/
+        cp ../../src/shared/production_security_fixes.py results-service/
+        cp ../../src/shared/production_monitoring.py results-service/
+        cd results-service && zip -r ../results-service.zip . && cd ..
+        
+        # Package orchestrator service
+        mkdir orchestrator-service
+        cp ../../src/lambda/lambda_orchestrator_secure.py orchestrator-service/lambda_function.py
+        cp ../../src/shared/dynamodb_data_service.py orchestrator-service/
+        cp ../../src/shared/production_security_fixes.py orchestrator-service/
+        cp ../../src/shared/production_monitoring.py orchestrator-service/
+        cd orchestrator-service && zip -r ../orchestrator-service.zip . && cd ..
+    
+    - name: Upload deployment packages
+      uses: actions/upload-artifact@v3
+      with:
+        name: lambda-packages
+        path: dist/lambda-packages/*.zip
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build-and-package
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Download deployment packages
+      uses: actions/download-artifact@v3
+      with:
+        name: lambda-packages
+        path: dist/lambda-packages/
+    
+    - name: Deploy CloudFormation stack to staging
+      run: |
+        aws cloudformation deploy \
+          --template-file infrastructure/cloudformation_architecture.yaml \
+          --stack-name search-agent-staging \
+          --parameter-overrides \
+            SerperAPIKey=${{ secrets.SERPER_API_KEY }} \
+          --capabilities CAPABILITY_IAM \
+          --region ${{ env.AWS_REGION }} \
+          --tags \
+            Environment=staging \
+            Project=search-agent \
+            ManagedBy=github-actions
+    
+    - name: Update Lambda functions
+      run: |
+        # Update search service
+        aws lambda update-function-code \
+          --function-name search-service-staging \
+          --zip-file fileb://dist/lambda-packages/search-service.zip
+        
+        # Update LLM service
+        aws lambda update-function-code \
+          --function-name llm-analysis-service-staging \
+          --zip-file fileb://dist/lambda-packages/llm-service.zip
+        
+        # Update results service
+        aws lambda update-function-code \
+          --function-name search-results-service-staging \
+          --zip-file fileb://dist/lambda-packages/results-service.zip
+        
+        # Update orchestrator service
+        aws lambda update-function-code \
+          --function-name orchestrator-function-staging \
+          --zip-file fileb://dist/lambda-packages/orchestrator-service.zip
+    
+    - name: Run staging tests
+      run: |
+        # Get API Gateway endpoint
+        STAGING_ENDPOINT=$(aws cloudformation describe-stacks \
+          --stack-name search-agent-staging \
+          --query 'Stacks[0].Outputs[?OutputKey==`APIEndpoint`].OutputValue' \
+          --output text)
+        
+        echo "Testing staging endpoint: $STAGING_ENDPOINT"
+        
+        # Basic health check
+        curl -f "$STAGING_ENDPOINT/health" || exit 1
+        
+        # Basic functionality test
+        curl -X POST "$STAGING_ENDPOINT/search" \
+          -H "Content-Type: application/json" \
+          -d '{"query": "test deployment", "num_results": 3}' \
+          --fail || exit 1
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Download deployment packages
+      uses: actions/download-artifact@v3
+      with:
+        name: lambda-packages
+        path: dist/lambda-packages/
+    
+    - name: Deploy CloudFormation stack to production
+      run: |
+        aws cloudformation deploy \
+          --template-file infrastructure/cloudformation_architecture.yaml \
+          --stack-name search-agent-production \
+          --parameter-overrides \
+            SerperAPIKey=${{ secrets.SERPER_API_KEY }} \
+          --capabilities CAPABILITY_IAM \
+          --region ${{ env.AWS_REGION }} \
+          --tags \
+            Environment=production \
+            Project=search-agent \
+            ManagedBy=github-actions
+    
+    - name: Update Lambda functions with blue-green deployment
+      run: |
+        # Create new versions and update aliases
+        
+        # Search service
+        SEARCH_VERSION=$(aws lambda publish-version \
+          --function-name search-service \
+          --zip-file fileb://dist/lambda-packages/search-service.zip \
+          --query 'Version' --output text)
+        
+        aws lambda update-alias \
+          --function-name search-service \
+          --name LIVE \
+          --function-version $SEARCH_VERSION
+        
+        # LLM service
+        LLM_VERSION=$(aws lambda publish-version \
+          --function-name llm-analysis-service \
+          --zip-file fileb://dist/lambda-packages/llm-service.zip \
+          --query 'Version' --output text)
+        
+        aws lambda update-alias \
+          --function-name llm-analysis-service \
+          --name LIVE \
+          --function-version $LLM_VERSION
+        
+        # Results service
+        RESULTS_VERSION=$(aws lambda publish-version \
+          --function-name search-results-service \
+          --zip-file fileb://dist/lambda-packages/results-service.zip \
+          --query 'Version' --output text)
+        
+        aws lambda update-alias \
+          --function-name search-results-service \
+          --name LIVE \
+          --function-version $RESULTS_VERSION
+        
+        # Orchestrator service
+        ORCHESTRATOR_VERSION=$(aws lambda publish-version \
+          --function-name orchestrator-function \
+          --zip-file fileb://dist/lambda-packages/orchestrator-service.zip \
+          --query 'Version' --output text)
+        
+        aws lambda update-alias \
+          --function-name orchestrator-function \
+          --name LIVE \
+          --function-version $ORCHESTRATOR_VERSION
+    
+    - name: Run production smoke tests
+      run: |
+        # Get API Gateway endpoint
+        PROD_ENDPOINT=$(aws cloudformation describe-stacks \
+          --stack-name search-agent-production \
+          --query 'Stacks[0].Outputs[?OutputKey==`APIEndpoint`].OutputValue' \
+          --output text)
+        
+        echo "Testing production endpoint: $PROD_ENDPOINT"
+        
+        # Health check
+        curl -f "$PROD_ENDPOINT/health" || exit 1
+        
+        # Basic functionality test
+        curl -X POST "$PROD_ENDPOINT/search" \
+          -H "Content-Type: application/json" \
+          -d '{"query": "production test", "num_results": 1}' \
+          --fail || exit 1
+    
+    - name: Notify deployment success
+      if: success()
+      run: |
+        echo "🚀 Production deployment successful!"
+        # Add Slack/Teams notification here if needed
+    
+    - name: Rollback on failure
+      if: failure()
+      run: |
+        echo "❌ Production deployment failed, initiating rollback..."
+        # Implement rollback logic here
+        # This could involve updating aliases back to previous versions

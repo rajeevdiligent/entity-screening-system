@@ -1,0 +1,98 @@
+# Environment Variables
+.env
+.env.local
+.env.production
+.env.staging
+config.env
+environment_config.env
+
+# AWS Credentials
+.aws/
+aws-credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.venv/
+.ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Deployment packages and artifacts
+*.zip
+deployment_packages/
+lambda_layer/
+lambda_packages/
+dist/
+deployment/
+
+# Test files
+test_*.py
+*_test.py
+debug_*.py
+
+# Secrets and Keys
+*.pem
+*.key
+secrets/
+keys/
+
+# Node modules (if any)
+node_modules/
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/

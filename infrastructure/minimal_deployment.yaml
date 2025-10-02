@@ -1,0 +1,202 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Minimal Entity Screening System for Testing'
+
+Parameters:
+  SerperAPIKey:
+    Type: String
+    NoEcho: true
+    Description: Serper API Key for search functionality
+    Default: placeholder-key-will-update-later
+  
+  LambdaCodeBucket:
+    Type: String
+    Description: S3 bucket containing Lambda deployment packages
+
+Resources:
+  # DynamoDB Table for storing results
+  ResultsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: search-analysis-results
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: query
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: query
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  # SNS Topic for async LLM processing
+  LLMProcessingTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: llm-processing-requests
+
+  # IAM Role for Lambda functions
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: EntityScreeningPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource: !GetAtt ResultsTable.Arn
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref LLMProcessingTopic
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: "arn:aws:bedrock:*:*:foundation-model/amazon.nova-*"
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: "*"
+
+  # Search Service Lambda
+  SearchServiceFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: entity-search-service
+      Runtime: python3.11
+      Handler: lambda_search_service_simple.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          SERPER_API_KEY: !Ref SerperAPIKey
+          LLM_PROCESSING_TOPIC: !Ref LLMProcessingTopic
+          RESULTS_TABLE: !Ref ResultsTable
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: search-service-with-deps.zip
+
+  # LLM Service Lambda
+  LLMServiceFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: entity-llm-service
+      Runtime: python3.11
+      Handler: lambda_llm_service_simple.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: llm-service-with-deps.zip
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          RESULTS_TABLE: !Ref ResultsTable
+          LLM_PROCESSING_TOPIC: !Ref LLMProcessingTopic
+
+  # SNS Subscription for LLM Processing
+  LLMProcessingSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: lambda
+      TopicArn: !Ref LLMProcessingTopic
+      Endpoint: !GetAtt LLMServiceFunction.Arn
+
+  # Lambda Permission for SNS
+  SNSInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LLMServiceFunction
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref LLMProcessingTopic
+
+  # API Gateway for Search Service
+  SearchAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: entity-screening-api
+      Description: API for Entity Screening System
+
+  # API Gateway Resource
+  SearchResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref SearchAPI
+      ParentId: !GetAtt SearchAPI.RootResourceId
+      PathPart: search
+
+  # API Gateway Method
+  SearchMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref SearchAPI
+      ResourceId: !Ref SearchResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SearchServiceFunction.Arn}/invocations'
+
+  # API Gateway Deployment
+  SearchAPIDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: SearchMethod
+    Properties:
+      RestApiId: !Ref SearchAPI
+      StageName: prod
+
+  # Lambda Permission for API Gateway
+  APIGatewayInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SearchServiceFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${SearchAPI}/*/*/*'
+
+Outputs:
+  SearchAPIEndpoint:
+    Description: API Gateway endpoint URL for search service
+    Value: !Sub 'https://${SearchAPI}.execute-api.${AWS::Region}.amazonaws.com/prod/search'
+    
+  ResultsTableName:
+    Description: DynamoDB Results Table Name
+    Value: !Ref ResultsTable
+    
+  LLMProcessingTopicArn:
+    Description: SNS Topic ARN for LLM Processing
+    Value: !Ref LLMProcessingTopic
+    
+  LLMServiceFunctionArn:
+    Description: LLM Service Lambda Function ARN
+    Value: !GetAtt LLMServiceFunction.Arn

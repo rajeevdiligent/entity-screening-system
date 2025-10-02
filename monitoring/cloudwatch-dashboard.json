@@ -1,0 +1,246 @@
+{
+    "widgets": [
+        {
+            "type": "metric",
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 6,
+            "properties": {
+                "metrics": [
+                    [ "SearchAgent", "SearchRequests", "Service", "SearchService", "Status", "Success" ],
+                    [ "...", "Error" ],
+                    [ "SearchAgent", "LLMRequests", "Service", "LLMService", "Status", "Success" ],
+                    [ "...", "Error" ],
+                    [ "SearchAgent", "SearchOnlyRequests", "ProcessingMode", "search_only", "Status", "Success" ],
+                    [ "SearchAgent", "AsyncRequests", "ProcessingMode", "async", "Status", "Success" ],
+                    [ "SearchAgent", "SyncRequests", "ProcessingMode", "sync", "Status", "Success" ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "us-east-1",
+                "title": "Request Volume by Service",
+                "period": 300,
+                "stat": "Sum"
+            }
+        },
+        {
+            "type": "metric",
+            "x": 12,
+            "y": 0,
+            "width": 12,
+            "height": 6,
+            "properties": {
+                "metrics": [
+                    [ "SearchAgent", "SearchProcessingTime", "Service", "SearchService", "Status", "Success" ],
+                    [ "SearchAgent", "LLMProcessingTime", "Service", "LLMService", "Status", "Success" ],
+                    [ "SearchAgent", "FunctionDuration", "FunctionName", "search-service" ],
+                    [ "...", "llm-analysis-service" ],
+                    [ "...", "orchestrator-function" ],
+                    [ "...", "search-results-service" ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "us-east-1",
+                "title": "Processing Times",
+                "period": 300,
+                "stat": "Average",
+                "yAxis": {
+                    "left": {
+                        "min": 0
+                    }
+                }
+            }
+        },
+        {
+            "type": "metric",
+            "x": 0,
+            "y": 6,
+            "width": 8,
+            "height": 6,
+            "properties": {
+                "metrics": [
+                    [ "AWS/Lambda", "Errors", "FunctionName", "search-service" ],
+                    [ "...", "llm-analysis-service" ],
+                    [ "...", "orchestrator-function" ],
+                    [ "...", "search-results-service" ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "us-east-1",
+                "title": "Lambda Errors",
+                "period": 300,
+                "stat": "Sum",
+                "yAxis": {
+                    "left": {
+                        "min": 0
+                    }
+                }
+            }
+        },
+        {
+            "type": "metric",
+            "x": 8,
+            "y": 6,
+            "width": 8,
+            "height": 6,
+            "properties": {
+                "metrics": [
+                    [ "AWS/Lambda", "Duration", "FunctionName", "search-service" ],
+                    [ "...", "llm-analysis-service" ],
+                    [ "...", "orchestrator-function" ],
+                    [ "...", "search-results-service" ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "us-east-1",
+                "title": "Lambda Duration",
+                "period": 300,
+                "stat": "Average",
+                "yAxis": {
+                    "left": {
+                        "min": 0
+                    }
+                }
+            }
+        },
+        {
+            "type": "metric",
+            "x": 16,
+            "y": 6,
+            "width": 8,
+            "height": 6,
+            "properties": {
+                "metrics": [
+                    [ "AWS/Lambda", "Invocations", "FunctionName", "search-service" ],
+                    [ "...", "llm-analysis-service" ],
+                    [ "...", "orchestrator-function" ],
+                    [ "...", "search-results-service" ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "us-east-1",
+                "title": "Lambda Invocations",
+                "period": 300,
+                "stat": "Sum"
+            }
+        },
+        {
+            "type": "metric",
+            "x": 0,
+            "y": 12,
+            "width": 12,
+            "height": 6,
+            "properties": {
+                "metrics": [
+                    [ "AWS/DynamoDB", "ConsumedReadCapacityUnits", "TableName", "search-analysis-results" ],
+                    [ ".", "ConsumedWriteCapacityUnits", ".", "." ],
+                    [ ".", "UserErrors", ".", "." ],
+                    [ ".", "SystemErrors", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "us-east-1",
+                "title": "DynamoDB Metrics",
+                "period": 300,
+                "stat": "Sum"
+            }
+        },
+        {
+            "type": "metric",
+            "x": 12,
+            "y": 12,
+            "width": 12,
+            "height": 6,
+            "properties": {
+                "metrics": [
+                    [ "SearchAgent", "SearchResultsCount", "Service", "SearchService", "Status", "Success" ],
+                    [ "SearchAgent", "LLMRelevanceScore", "Service", "LLMService", "Status", "Success" ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "us-east-1",
+                "title": "Business Metrics",
+                "period": 300,
+                "stat": "Average"
+            }
+        },
+        {
+            "type": "metric",
+            "x": 0,
+            "y": 18,
+            "width": 8,
+            "height": 6,
+            "properties": {
+                "metrics": [
+                    [ "AWS/ApiGateway", "Count", "ApiName", "search-agent-api" ],
+                    [ ".", "4XXError", ".", "." ],
+                    [ ".", "5XXError", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "us-east-1",
+                "title": "API Gateway Requests",
+                "period": 300,
+                "stat": "Sum"
+            }
+        },
+        {
+            "type": "metric",
+            "x": 8,
+            "y": 18,
+            "width": 8,
+            "height": 6,
+            "properties": {
+                "metrics": [
+                    [ "AWS/ApiGateway", "Latency", "ApiName", "search-agent-api" ],
+                    [ ".", "IntegrationLatency", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "us-east-1",
+                "title": "API Gateway Latency",
+                "period": 300,
+                "stat": "Average",
+                "yAxis": {
+                    "left": {
+                        "min": 0
+                    }
+                }
+            }
+        },
+        {
+            "type": "metric",
+            "x": 16,
+            "y": 18,
+            "width": 8,
+            "height": 6,
+            "properties": {
+                "metrics": [
+                    [ "AWS/SNS", "NumberOfMessagesPublished", "TopicName", "llm-processing-requests" ],
+                    [ "AWS/SQS", "NumberOfMessagesSent", "QueueName", "llm-processing-queue" ],
+                    [ ".", "NumberOfMessagesReceived", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "us-east-1",
+                "title": "Message Queue Metrics",
+                "period": 300,
+                "stat": "Sum"
+            }
+        },
+        {
+            "type": "log",
+            "x": 0,
+            "y": 24,
+            "width": 24,
+            "height": 6,
+            "properties": {
+                "query": "SOURCE '/aws/lambda/search-service' | SOURCE '/aws/lambda/llm-analysis-service' | SOURCE '/aws/lambda/orchestrator-function' | SOURCE '/aws/lambda/search-results-service'\n| fields @timestamp, @message\n| filter @message like /ERROR/\n| sort @timestamp desc\n| limit 100",
+                "region": "us-east-1",
+                "title": "Recent Errors Across All Services",
+                "view": "table"
+            }
+        }
+    ]
+}
