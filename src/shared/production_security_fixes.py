@@ -153,6 +153,69 @@ class InputValidator:
             
         except Exception:
             return False
+    
+    @staticmethod
+    def sanitize_string(input_string: str, max_length: int = 1000) -> str:
+        """Sanitize string input for security and processing"""
+        try:
+            if not input_string or not isinstance(input_string, str):
+                return ""
+            
+            # Remove null bytes and control characters
+            sanitized = ''.join(char for char in input_string if ord(char) >= 32 or char in '\t\n\r')
+            
+            # Trim whitespace
+            sanitized = sanitized.strip()
+            
+            # Truncate to max length
+            if len(sanitized) > max_length:
+                sanitized = sanitized[:max_length]
+            
+            # Remove potentially dangerous patterns
+            dangerous_patterns = [
+                '<script', '</script>', 'javascript:', 'vbscript:', 'onload=', 'onerror=',
+                'eval(', 'exec(', 'system(', 'shell_exec(', '<?php', '<%', '%>'
+            ]
+            
+            sanitized_lower = sanitized.lower()
+            for pattern in dangerous_patterns:
+                if pattern in sanitized_lower:
+                    # Replace dangerous patterns with safe alternatives
+                    sanitized = sanitized.replace(pattern, '[FILTERED]')
+                    sanitized = sanitized.replace(pattern.upper(), '[FILTERED]')
+                    sanitized = sanitized.replace(pattern.capitalize(), '[FILTERED]')
+            
+            return sanitized
+            
+        except Exception as e:
+            logger.error(f"String sanitization failed: {e}")
+            return ""
+    
+    @staticmethod
+    def sanitize_html(input_string: str) -> str:
+        """Sanitize HTML content by removing potentially dangerous tags"""
+        try:
+            if not input_string:
+                return ""
+            
+            # Remove script tags and their content
+            import re
+            sanitized = re.sub(r'<script[^>]*>.*?</script>', '', input_string, flags=re.IGNORECASE | re.DOTALL)
+            
+            # Remove other potentially dangerous tags
+            dangerous_tags = ['script', 'iframe', 'object', 'embed', 'form', 'input', 'textarea', 'button']
+            for tag in dangerous_tags:
+                sanitized = re.sub(f'<{tag}[^>]*>.*?</{tag}>', '', sanitized, flags=re.IGNORECASE | re.DOTALL)
+                sanitized = re.sub(f'<{tag}[^>]*/?>', '', sanitized, flags=re.IGNORECASE)
+            
+            # Remove javascript: and other dangerous protocols
+            sanitized = re.sub(r'(javascript|vbscript|data|file):[^"\'>\s]*', '', sanitized, flags=re.IGNORECASE)
+            
+            return sanitized.strip()
+            
+        except Exception as e:
+            logger.error(f"HTML sanitization failed: {e}")
+            return input_string
 
 class RateLimiter:
     """Simple rate limiting implementation"""

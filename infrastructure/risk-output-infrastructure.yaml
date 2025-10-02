@@ -1,0 +1,346 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Risk Output Infrastructure for Entity Screening System - DynamoDB, SQS, SNS, and Lambda'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: entity-screening
+    Description: Name of the project, used as a prefix for resources
+  Environment:
+    Type: String
+    Default: prod
+    Description: The deployment environment (e.g., dev, staging, prod)
+
+Resources:
+  # DynamoDB Table for Risk Assessments
+  EntityRiskScoresTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-${Environment}-risk-scores"
+      AttributeDefinitions:
+        - AttributeName: record_id
+          AttributeType: S
+        - AttributeName: entity_name
+          AttributeType: S
+        - AttributeName: risk_level
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: record_id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      GlobalSecondaryIndexes:
+        - IndexName: EntityNameIndex
+          KeySchema:
+            - AttributeName: entity_name
+              KeyType: HASH
+            - AttributeName: timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: RiskLevelIndex
+          KeySchema:
+            - AttributeName: risk_level
+              KeyType: HASH
+            - AttributeName: timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: RiskAssessmentStorage
+
+  # SQS Queue for Risk Notifications
+  RiskNotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${Environment}-risk-notifications"
+      VisibilityTimeout: 300
+      MessageRetentionPeriod: 1209600  # 14 days
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt RiskNotificationDLQ.Arn
+        maxReceiveCount: 3
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Dead Letter Queue for Risk Notifications
+  RiskNotificationDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${Environment}-risk-notifications-dlq"
+      MessageRetentionPeriod: 1209600  # 14 days
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # SQS Queue for Manual Review
+  ManualReviewQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${Environment}-manual-review"
+      VisibilityTimeout: 900  # 15 minutes for manual review
+      MessageRetentionPeriod: 1209600  # 14 days
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # SNS Topic for High-Risk Alerts
+  HighRiskAlertSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${Environment}-high-risk-alerts"
+      DisplayName: !Sub "${ProjectName} High Risk Alerts"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # SNS Topic for All Risk Notifications
+  RiskNotificationSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${Environment}-risk-notifications"
+      DisplayName: !Sub "${ProjectName} Risk Notifications"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # IAM Role for Risk Notification Processor Lambda
+  RiskNotificationProcessorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-risk-notification-processor-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: RiskNotificationProcessorPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                  - sqs:SendMessage
+                Resource:
+                  - !GetAtt RiskNotificationQueue.Arn
+                  - !GetAtt ManualReviewQueue.Arn
+                  - !GetAtt RiskNotificationDLQ.Arn
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource:
+                  - !Ref HighRiskAlertSNSTopic
+                  - !Ref RiskNotificationSNSTopic
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !GetAtt EntityRiskScoresTable.Arn
+                  - !Sub "${EntityRiskScoresTable.Arn}/index/*"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Lambda Function for Risk Notification Processing
+  RiskNotificationProcessorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-risk-notification-processor"
+      Handler: lambda_risk_notification_processor.lambda_handler
+      Runtime: python3.11
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import boto3
+          from typing import Dict, Any
+          
+          sns_client = boto3.client('sns')
+          sqs_client = boto3.client('sqs')
+          
+          HIGH_RISK_SNS_TOPIC_ARN = os.getenv('HIGH_RISK_SNS_TOPIC_ARN')
+          MANUAL_REVIEW_QUEUE_URL = os.getenv('MANUAL_REVIEW_QUEUE_URL')
+          
+          def lambda_handler(event, context):
+              print(f"Received SQS event: {json.dumps(event)}")
+              
+              for record in event['Records']:
+                  try:
+                      message_body = json.loads(record['body'])
+                      
+                      record_id = message_body.get('record_id')
+                      entity_name = message_body.get('entity_name')
+                      risk_level = message_body.get('risk_level', 'UNKNOWN').upper()
+                      overall_risk_score = message_body.get('overall_risk_score')
+                      confidence_level = message_body.get('confidence_level', 0.0)
+                      action_required = message_body.get('action_required', 'NONE')
+                      
+                      print(f"Processing notification for {entity_name} (Risk: {risk_level})")
+                      
+                      # Route high-risk alerts to SNS
+                      if risk_level == 'HIGH' and HIGH_RISK_SNS_TOPIC_ARN:
+                          sns_client.publish(
+                              TopicArn=HIGH_RISK_SNS_TOPIC_ARN,
+                              Message=json.dumps(message_body),
+                              Subject=f"HIGH RISK ALERT: {entity_name}",
+                              MessageAttributes={
+                                  'RiskLevel': {'DataType': 'String', 'StringValue': risk_level},
+                                  'EntityName': {'DataType': 'String', 'StringValue': entity_name}
+                              }
+                          )
+                          print(f"Sent HIGH RISK SNS alert for {entity_name}")
+                      
+                      # Route low-confidence items to manual review
+                      if action_required == 'REVIEW' and MANUAL_REVIEW_QUEUE_URL:
+                          sqs_client.send_message(
+                              QueueUrl=MANUAL_REVIEW_QUEUE_URL,
+                              MessageBody=json.dumps(message_body),
+                              MessageAttributes={
+                                  'RiskLevel': {'DataType': 'String', 'StringValue': risk_level},
+                                  'EntityName': {'DataType': 'String', 'StringValue': entity_name},
+                                  'ReviewReason': {'DataType': 'String', 'StringValue': 'Low Confidence'}
+                              }
+                          )
+                          print(f"Sent to manual review queue: {entity_name}")
+                      
+                  except Exception as e:
+                      print(f"Error processing SQS record: {e}")
+              
+              return {'statusCode': 200, 'body': json.dumps('Notifications processed')}
+      MemorySize: 256
+      Timeout: 60
+      Role: !GetAtt RiskNotificationProcessorRole.Arn
+      Environment:
+        Variables:
+          HIGH_RISK_SNS_TOPIC_ARN: !Ref HighRiskAlertSNSTopic
+          MANUAL_REVIEW_QUEUE_URL: !Ref ManualReviewQueue
+          RISK_NOTIFICATION_SNS_TOPIC_ARN: !Ref RiskNotificationSNSTopic
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # SQS Event Source Mapping for Risk Notification Processor
+  RiskNotificationQueueEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 10
+      Enabled: true
+      EventSourceArn: !GetAtt RiskNotificationQueue.Arn
+      FunctionName: !GetAtt RiskNotificationProcessorFunction.Arn
+
+  # IAM Policy for LLM Service to Access Risk Infrastructure
+  LLMServiceRiskAccessPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${ProjectName}-${Environment}-llm-risk-access-policy"
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:PutItem
+              - dynamodb:GetItem
+              - dynamodb:UpdateItem
+              - dynamodb:Query
+              - dynamodb:Scan
+            Resource:
+              - !GetAtt EntityRiskScoresTable.Arn
+              - !Sub "${EntityRiskScoresTable.Arn}/index/*"
+          - Effect: Allow
+            Action:
+              - sqs:SendMessage
+              - sqs:GetQueueAttributes
+            Resource:
+              - !GetAtt RiskNotificationQueue.Arn
+          - Effect: Allow
+            Action:
+              - sns:Publish
+            Resource:
+              - !Ref HighRiskAlertSNSTopic
+              - !Ref RiskNotificationSNSTopic
+      Roles:
+        - entity-screening-minimal-LambdaExecutionRole-hGuYsJ37Q7KI  # Existing LLM service role
+
+Outputs:
+  EntityRiskScoresTableName:
+    Description: Name of the DynamoDB table for entity risk scores
+    Value: !Ref EntityRiskScoresTable
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-EntityRiskScoresTableName"
+
+  EntityRiskScoresTableArn:
+    Description: ARN of the DynamoDB table for entity risk scores
+    Value: !GetAtt EntityRiskScoresTable.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-EntityRiskScoresTableArn"
+
+  RiskNotificationQueueUrl:
+    Description: URL of the SQS queue for risk notifications
+    Value: !Ref RiskNotificationQueue
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-RiskNotificationQueueUrl"
+
+  RiskNotificationQueueArn:
+    Description: ARN of the SQS queue for risk notifications
+    Value: !GetAtt RiskNotificationQueue.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-RiskNotificationQueueArn"
+
+  HighRiskAlertSNSTopicArn:
+    Description: ARN of the SNS topic for high-risk alerts
+    Value: !Ref HighRiskAlertSNSTopic
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-HighRiskAlertSNSTopicArn"
+
+  RiskNotificationSNSTopicArn:
+    Description: ARN of the SNS topic for risk notifications
+    Value: !Ref RiskNotificationSNSTopic
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-RiskNotificationSNSTopicArn"
+
+  ManualReviewQueueUrl:
+    Description: URL of the SQS queue for manual review
+    Value: !Ref ManualReviewQueue
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-ManualReviewQueueUrl"
+
+  RiskNotificationProcessorFunctionName:
+    Description: Name of the Lambda function that processes risk notifications
+    Value: !Ref RiskNotificationProcessorFunction
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-RiskNotificationProcessorFunctionName"

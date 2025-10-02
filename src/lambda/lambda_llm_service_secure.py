@@ -204,10 +204,16 @@ def analyze_with_nova_llm(result: Dict, context: str) -> Dict:
     
     model_id = "amazon.nova-micro-v1:0"
     
+    # Use the new Nova API format with messages
     body = json.dumps({
-        "inputText": prompt,
-        "textGenerationConfig": {
-            "maxTokenCount": 500,
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"text": prompt}]
+            }
+        ],
+        "inferenceConfig": {
+            "maxTokens": 500,
             "temperature": 0.3,
             "topP": 0.9
         }
@@ -221,7 +227,7 @@ def analyze_with_nova_llm(result: Dict, context: str) -> Dict:
     )
     
     response_body = json.loads(response.get('body').read())
-    llm_response = response_body.get('results')[0].get('outputText')
+    llm_response = response_body.get('output', {}).get('message', {}).get('content', [{}])[0].get('text', '')
     
     # Parse JSON response
     try:

@@ -22,7 +22,7 @@ class RiskOutputService:
         self.sqs = boto3.client('sqs')
         
         # Table and queue configuration
-        self.output_table_name = os.getenv('RISK_OUTPUT_TABLE', 'entity-risk-scores')
+        self.output_table_name = os.getenv('RISK_OUTPUT_TABLE_NAME', 'entity-risk-scores')
         self.notification_queue_url = os.getenv('RISK_NOTIFICATION_QUEUE_URL')
         
         # Initialize output table

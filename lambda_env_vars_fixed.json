@@ -1,0 +1,9 @@
+{
+  "Variables": {
+    "RESULTS_TABLE": "search-analysis-results",
+    "LLM_PROCESSING_TOPIC": "arn:aws:sns:us-east-1:891067072053:llm-processing-requests",
+    "RISK_OUTPUT_TABLE_NAME": "entity-screening-prod-risk-scores",
+    "RISK_NOTIFICATION_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/891067072053/entity-screening-prod-risk-notifications",
+    "HIGH_RISK_SNS_TOPIC_ARN": "arn:aws:sns:us-east-1:891067072053:entity-screening-prod-high-risk-alerts"
+  }
+}
