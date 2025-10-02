@@ -9,44 +9,58 @@
 
     📱 Client Application
          │
-         │ POST /prod/search
-         │ {
-         │   "query": "Wells Fargo fraud",
-         │   "num_results": 3,
-         │   "enable_llm_processing": true
-         │ }
-         ▼
-    ┌─────────────────────┐
-    │   🚪 API Gateway    │ ◄─── HTTPS/TLS Encryption
-    │  (REST API)         │      Security Headers
-    │                     │      Rate Limiting
-    └─────────────────────┘
-         │
-         │ Lambda Proxy Integration
-         │ event['body'] = JSON payload
-         ▼
+         │ POST /prod/search          │ POST /prod/GDCsearch
+         │ {                          │ {
+         │   "query": "Wells Fargo    │   "query": "Wells Fargo fraud",
+         │            fraud",         │   "index": "gdc-entities",
+         │   "num_results": 3,        │   "size": 10,
+         │   "enable_llm_processing": │   "enable_llm_processing": true
+         │            true            │ }
+         │ }                          │
+         ▼                            ▼
+    ┌─────────────────────────────────────────┐
+    │         🚪 API Gateway (REST API)        │ ◄─── HTTPS/TLS Encryption
+    │                                         │      Security Headers
+    │  /prod/search     │  /prod/GDCsearch    │      Rate Limiting
+    │  (Serper API)     │  (OpenSearch)       │      CORS Configuration
+    └─────────────────────────────────────────┘
+         │                            │
+         │ Lambda Proxy Integration   │ Lambda Proxy Integration
+         │ event['body'] = JSON       │ event['body'] = JSON
+         ▼                            ▼
 
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                        🔍 SEARCH SERVICE LAYER                                          │
+│                        🔍 DUAL SEARCH SERVICE LAYER                                     │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 
-    ┌─────────────────────┐
-    │  🔍 Search Service  │ ◄─── entity-search-service
-    │    Lambda Function  │      Runtime: Python 3.11
-    │                     │      Memory: 256MB, Timeout: 30s
-    │  ┌─────────────────┐│      Handler: lambda_search_service_secure.lambda_handler
-    │  │ Input Validator ││ ◄─── Validates query, num_results
-    │  └─────────────────┘│      Security checks
-    │  ┌─────────────────┐│
-    │  │Security Manager ││ ◄─── AWS Secrets Manager integration
-    │  └─────────────────┘│      API key retrieval
-    │  ┌─────────────────┐│
-    │  │ Serper API Call ││ ◄─── External search via requests library
-    │  └─────────────────┘│      Google search results
-    └─────────────────────┘
-         │                │
-         │ Search Results │ SNS Message (if LLM enabled)
-         ▼                ▼
+    ┌─────────────────────┐              ┌─────────────────────┐
+    │  🔍 Serper Search   │              │  🔍 GDC Search      │
+    │    Service Lambda   │              │    Service Lambda   │
+    │                     │              │                     │
+    │ entity-search-      │              │ entity-gdc-search-  │
+    │ service             │              │ service             │
+    │                     │              │                     │
+    │ Runtime: Python 3.11│              │ Runtime: Python 3.11│
+    │ Memory: 256MB       │              │ Memory: 512MB       │
+    │ Timeout: 30s        │              │ Timeout: 60s        │
+    │                     │              │                     │
+    │ ┌─────────────────┐ │              │ ┌─────────────────┐ │
+    │ │ Input Validator │ │ ◄─── Query   │ │ Input Validator │ │ ◄─── Query
+    │ └─────────────────┘ │      Security│ └─────────────────┘ │      Security
+    │ ┌─────────────────┐ │      Checks  │ ┌─────────────────┐ │      Checks
+    │ │Security Manager │ │              │ │Security Manager │ │
+    │ └─────────────────┘ │              │ └─────────────────┘ │
+    │ ┌─────────────────┐ │              │ ┌─────────────────┐ │
+    │ │ Serper API Call │ │ ◄─── Google  │ │OpenSearch Client│ │ ◄─── GDC
+    │ │ (External)      │ │      Search  │ │ (AWS Service)   │ │      Index
+    │ └─────────────────┘ │              │ └─────────────────┘ │
+    └─────────────────────┘              └─────────────────────┘
+         │                                        │
+         │ Serper Results                         │ OpenSearch Results
+         ▼                                        ▼
+         │                                        │
+         │ Both services store results & trigger LLM processing
+         ▼                                        ▼
     ┌─────────────────────┐    ┌─────────────────────┐
     │  💾 DynamoDB        │    │  📢 SNS Topic       │
     │  Storage            │    │  (LLM Processing)   │
@@ -126,27 +140,46 @@
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 
     ┌─────────────────────┐    ┌─────────────────────┐    ┌─────────────────────┐
-    │  🔍 Serper API      │    │  🧠 Amazon Bedrock  │    │  💾 AWS DynamoDB    │
-    │  (Google Search)    │    │  (Nova LLM)         │    │  (Data Storage)     │
+    │  🔍 Serper API      │    │  🔍 AWS OpenSearch  │    │  🧠 Amazon Bedrock  │
+    │  (Google Search)    │    │  (GDC Index)        │    │  (Nova LLM)         │
     │                     │    │                     │    │                     │
-    │ https://google.     │    │ amazon.nova-micro-  │    │ search-analysis-    │
-    │ serper.dev/search   │    │ v1:0                │    │ results             │
+    │ https://google.     │    │ GDC Entity Index    │    │ amazon.nova-micro-  │
+    │ serper.dev/search   │    │ Elasticsearch API   │    │ v1:0                │
     │                     │    │                     │    │                     │
-    │ Real-time search    │    │ Risk analysis       │    │ NoSQL database      │
-    │ 3 results per query │    │ JSON response       │    │ Auto-scaling        │
-    │ Snippet extraction  │    │ Multi-dimensional   │    │ TTL: 30 days        │
-    └─────────────────────┘    │ scoring             │    │ Float→Decimal       │
-                               └─────────────────────┘    │ conversion          │
-                                                          └─────────────────────┘
+    │ Real-time search    │    │ Structured search   │    │ Risk analysis       │
+    │ 3 results per query │    │ Entity matching     │    │ JSON response       │
+    │ Snippet extraction  │    │ Relevance scoring   │    │ Multi-dimensional   │
+    │ Web content         │    │ Faceted search      │    │ scoring             │
+    └─────────────────────┘    │ Full-text queries   │    └─────────────────────┘
+                               └─────────────────────┘
+    
+    ┌─────────────────────┐
+    │  💾 AWS DynamoDB    │
+    │  (Data Storage)     │
+    │                     │
+    │ search-analysis-    │
+    │ results             │
+    │                     │
+    │ NoSQL database      │
+    │ Auto-scaling        │
+    │ TTL: 30 days        │
+    │ Float→Decimal       │
+    │ conversion          │
+    └─────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                        📊 DATA FLOW SUMMARY                                             │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 
-1. 📱 Client → 🚪 API Gateway → 🔍 Search Service
-   ├─ Input validation & security checks
-   ├─ Serper API call for search results
-   └─ Immediate response to client
+1. 📱 Client → 🚪 API Gateway → 🔍 Dual Search Services
+   ├─ /prod/search → Serper API (Google Search)
+   │  ├─ Input validation & security checks
+   │  ├─ External API call for web results
+   │  └─ Immediate response to client
+   └─ /prod/GDCsearch → OpenSearch (GDC Index)
+      ├─ Input validation & security checks
+      ├─ AWS OpenSearch query execution
+      └─ Structured entity data response
 
 2. 🔍 Search Service → 💾 DynamoDB (Search Results)
    ├─ Store raw search data
@@ -168,11 +201,13 @@
 │                        🎯 SYSTEM CAPABILITIES                                           │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 
-✅ SEARCH CAPABILITIES:
-   • Real-time Google search via Serper API
-   • Configurable result count (1-10)
+✅ DUAL SEARCH CAPABILITIES:
+   • Real-time Google search via Serper API (/prod/search)
+   • GDC entity search via AWS OpenSearch (/prod/GDCsearch)
+   • Configurable result count and pagination
    • Query validation and sanitization
    • Response caching and optimization
+   • Structured vs. unstructured data sources
 
 ✅ RISK ANALYSIS:
    • Financial crimes detection (fraud, money laundering)
@@ -215,9 +250,9 @@ Region: us-east-1
 Account: 891067072053
 ```
 
-## 🔄 **Request/Response Flow Example**
+## 🔄 **Dual Endpoint Request/Response Examples**
 
-### **Input Request:**
+### **🔍 Serper API Search (Google):**
 ```json
 POST /prod/search
 {
@@ -227,10 +262,26 @@ POST /prod/search
 }
 ```
 
-### **Immediate Response:**
+### **🔍 GDC OpenSearch (Entity Index):**
+```json
+POST /prod/GDCsearch
+{
+  "query": "Wells Fargo regulatory violations",
+  "index": "gdc-entities",
+  "size": 10,
+  "enable_llm_processing": true,
+  "filters": {
+    "entity_type": "financial_institution",
+    "jurisdiction": "US"
+  }
+}
+```
+
+### **🔍 Serper Response (Web Results):**
 ```json
 {
   "query": "Wells Fargo regulatory violations",
+  "source": "serper_api",
   "results": [
     {
       "title": "Wells Fargo Regulatory Issues",
@@ -242,11 +293,30 @@ POST /prod/search
   "total_count": 3,
   "timestamp": "2025-10-02T09:46:30.216529",
   "llm_processing_triggered": true,
-  "stored_in_database": true,
-  "storage_info": {
-    "query_hash": "abc123...",
-    "storage_timestamp": "2025-10-02T09:46:30.621299"
-  }
+  "stored_in_database": true
+}
+```
+
+### **🔍 GDC OpenSearch Response (Entity Data):**
+```json
+{
+  "query": "Wells Fargo regulatory violations",
+  "source": "gdc_opensearch",
+  "results": [
+    {
+      "entity_id": "WFC_US_BANK_001",
+      "entity_name": "Wells Fargo & Company",
+      "entity_type": "financial_institution",
+      "jurisdiction": "US",
+      "risk_indicators": ["regulatory_violations", "consumer_complaints"],
+      "last_updated": "2025-10-01T12:00:00Z",
+      "relevance_score": 0.95
+    }
+  ],
+  "total_hits": 15,
+  "timestamp": "2025-10-02T09:46:30.216529",
+  "llm_processing_triggered": true,
+  "stored_in_database": true
 }
 ```
 
