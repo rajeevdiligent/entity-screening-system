@@ -1,0 +1,369 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Risk Output Infrastructure - DynamoDB Output Table and SQS Notification Queue'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: 'entity-screening'
+    Description: 'Environment name for resource naming'
+  
+  RiskOutputTableName:
+    Type: String
+    Default: 'entity-risk-scores'
+    Description: 'Name for the risk output DynamoDB table'
+  
+  NotificationRetentionDays:
+    Type: Number
+    Default: 14
+    Description: 'Message retention period in days for SQS queues'
+
+Resources:
+  # DynamoDB Table for Risk Scores Output
+  RiskOutputTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref RiskOutputTableName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: record_id
+          AttributeType: S
+        - AttributeName: entity_name
+          AttributeType: S
+        - AttributeName: risk_level
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: record_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: EntityNameIndex
+          KeySchema:
+            - AttributeName: entity_name
+              KeyType: HASH
+            - AttributeName: timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: RiskLevelIndex
+          KeySchema:
+            - AttributeName: risk_level
+              KeyType: HASH
+            - AttributeName: timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: 'Risk Assessment Output Storage'
+
+  # SQS Queue for Risk Notifications
+  RiskNotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${EnvironmentName}-risk-notifications'
+      MessageRetentionPeriod: !Ref NotificationRetentionDays
+      VisibilityTimeoutSeconds: 300
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt RiskNotificationDLQ.Arn
+        maxReceiveCount: 3
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: 'Risk Assessment Notifications'
+
+  # Dead Letter Queue for Failed Notifications
+  RiskNotificationDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${EnvironmentName}-risk-notifications-dlq'
+      MessageRetentionPeriod: 1209600  # 14 days
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: 'Failed Risk Notifications'
+
+  # SQS Queue for Manual Review Requests
+  ManualReviewQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${EnvironmentName}-manual-review'
+      MessageRetentionPeriod: 1209600  # 14 days
+      VisibilityTimeoutSeconds: 900    # 15 minutes for manual processing
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: 'Manual Review Requests'
+
+  # SNS Topic for High-Risk Alerts
+  HighRiskAlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${EnvironmentName}-high-risk-alerts'
+      DisplayName: 'High Risk Entity Alerts'
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: 'High Risk Alerts'
+
+  # Lambda Function for Risk Notification Processing
+  RiskNotificationProcessor:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${EnvironmentName}-risk-notification-processor'
+      Runtime: python3.11
+      Handler: lambda_risk_notification_processor.lambda_handler
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': 'Placeholder function'}
+      MemorySize: 256
+      Timeout: 300
+      Role: !GetAtt RiskProcessorLambdaRole.Arn
+      Environment:
+        Variables:
+          RISK_OUTPUT_TABLE: !Ref RiskOutputTable
+          RISK_NOTIFICATION_QUEUE_URL: !Ref RiskNotificationQueue
+          MANUAL_REVIEW_QUEUE_URL: !Ref ManualReviewQueue
+          HIGH_RISK_ALERT_TOPIC: !Ref HighRiskAlertTopic
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: 'Risk Notification Processing'
+
+  # Lambda Function for Risk Dashboard API
+  RiskDashboardFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${EnvironmentName}-risk-dashboard'
+      Runtime: python3.11
+      Handler: lambda_risk_notification_processor.get_risk_dashboard_data
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': 'Placeholder function'}
+      MemorySize: 512
+      Timeout: 30
+      Role: !GetAtt RiskProcessorLambdaRole.Arn
+      Environment:
+        Variables:
+          RISK_OUTPUT_TABLE: !Ref RiskOutputTable
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: 'Risk Dashboard API'
+
+  # Lambda Function for Manual Review Processing
+  ManualReviewProcessor:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${EnvironmentName}-manual-review-processor'
+      Runtime: python3.11
+      Handler: lambda_risk_notification_processor.manual_review_handler
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': 'Placeholder function'}
+      MemorySize: 256
+      Timeout: 900  # 15 minutes for manual processing
+      Role: !GetAtt RiskProcessorLambdaRole.Arn
+      Environment:
+        Variables:
+          RISK_OUTPUT_TABLE: !Ref RiskOutputTable
+          MANUAL_REVIEW_QUEUE_URL: !Ref ManualReviewQueue
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Purpose
+          Value: 'Manual Review Processing'
+
+  # IAM Role for Risk Processing Lambda Functions
+  RiskProcessorLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${EnvironmentName}-risk-processor-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: RiskProcessorPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # DynamoDB permissions for risk output table
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !GetAtt RiskOutputTable.Arn
+                  - !Sub '${RiskOutputTable.Arn}/index/*'
+              
+              # SQS permissions for notification queues
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                  - sqs:SendMessage
+                Resource:
+                  - !GetAtt RiskNotificationQueue.Arn
+                  - !GetAtt RiskNotificationDLQ.Arn
+                  - !GetAtt ManualReviewQueue.Arn
+              
+              # SNS permissions for high-risk alerts
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource:
+                  - !Ref HighRiskAlertTopic
+              
+              # CloudWatch permissions for metrics and logging
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  # Event Source Mapping for Risk Notification Queue
+  RiskNotificationEventSource:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt RiskNotificationQueue.Arn
+      FunctionName: !Ref RiskNotificationProcessor
+      BatchSize: 10
+      MaximumBatchingWindowInSeconds: 5
+
+  # Event Source Mapping for Manual Review Queue
+  ManualReviewEventSource:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt ManualReviewQueue.Arn
+      FunctionName: !Ref ManualReviewProcessor
+      BatchSize: 5
+      MaximumBatchingWindowInSeconds: 10
+
+  # API Gateway for Risk Dashboard
+  RiskDashboardAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub '${EnvironmentName}-risk-dashboard-api'
+      Description: 'API for accessing risk assessment data'
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # API Gateway Resource for Risk Data
+  RiskDataResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RiskDashboardAPI
+      ParentId: !GetAtt RiskDashboardAPI.RootResourceId
+      PathPart: 'risk-data'
+
+  # API Gateway Method for Risk Data
+  RiskDataMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RiskDashboardAPI
+      ResourceId: !Ref RiskDataResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RiskDashboardFunction.Arn}/invocations'
+
+  # Lambda Permission for API Gateway
+  RiskDashboardAPIPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RiskDashboardFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RiskDashboardAPI}/*/*'
+
+  # API Gateway Deployment
+  RiskDashboardAPIDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: RiskDataMethod
+    Properties:
+      RestApiId: !Ref RiskDashboardAPI
+      StageName: 'prod'
+
+Outputs:
+  RiskOutputTableName:
+    Description: 'Name of the risk output DynamoDB table'
+    Value: !Ref RiskOutputTable
+    Export:
+      Name: !Sub '${EnvironmentName}-risk-output-table'
+
+  RiskOutputTableArn:
+    Description: 'ARN of the risk output DynamoDB table'
+    Value: !GetAtt RiskOutputTable.Arn
+    Export:
+      Name: !Sub '${EnvironmentName}-risk-output-table-arn'
+
+  RiskNotificationQueueUrl:
+    Description: 'URL of the risk notification SQS queue'
+    Value: !Ref RiskNotificationQueue
+    Export:
+      Name: !Sub '${EnvironmentName}-risk-notification-queue-url'
+
+  RiskNotificationQueueArn:
+    Description: 'ARN of the risk notification SQS queue'
+    Value: !GetAtt RiskNotificationQueue.Arn
+    Export:
+      Name: !Sub '${EnvironmentName}-risk-notification-queue-arn'
+
+  ManualReviewQueueUrl:
+    Description: 'URL of the manual review SQS queue'
+    Value: !Ref ManualReviewQueue
+    Export:
+      Name: !Sub '${EnvironmentName}-manual-review-queue-url'
+
+  HighRiskAlertTopicArn:
+    Description: 'ARN of the high-risk alert SNS topic'
+    Value: !Ref HighRiskAlertTopic
+    Export:
+      Name: !Sub '${EnvironmentName}-high-risk-alert-topic-arn'
+
+  RiskDashboardAPIEndpoint:
+    Description: 'API Gateway endpoint for risk dashboard'
+    Value: !Sub 'https://${RiskDashboardAPI}.execute-api.${AWS::Region}.amazonaws.com/prod'
+    Export:
+      Name: !Sub '${EnvironmentName}-risk-dashboard-api-endpoint'
+
+  RiskProcessorLambdaRoleArn:
+    Description: 'ARN of the risk processor Lambda role'
+    Value: !GetAtt RiskProcessorLambdaRole.Arn
+    Export:
+      Name: !Sub '${EnvironmentName}-risk-processor-lambda-role-arn'

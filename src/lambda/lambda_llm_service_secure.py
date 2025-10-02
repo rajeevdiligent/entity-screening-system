@@ -12,6 +12,7 @@ from datetime import datetime
 from shared.production_security_fixes import SecurityManager, InputValidator, create_secure_response
 from shared.production_monitoring import CloudWatchMetrics, PerformanceMonitor
 from shared.dynamodb_data_service import SearchResultsDataService
+from shared.risk_output_service import RiskOutputService
 
 # Initialize security and monitoring
 security_manager = SecurityManager()
@@ -108,6 +109,38 @@ def process_search_results(message: Dict):
         metrics.increment_counter('llm_storage_errors')
         # Fallback to old storage method
         store_results_fallback(query, processed_results)
+    
+    # Store risk scores in output table and send notifications
+    try:
+        risk_output_service = RiskOutputService()
+        source = message.get('source', 'unknown')
+        
+        for result in processed_results:
+            # Store risk assessment in output table
+            risk_storage_result = risk_output_service.store_risk_assessment(
+                query=query,
+                entity_data=result.get('original_result', {}),
+                risk_analysis=result,
+                source=source
+            )
+            
+            # Send notification to SQS queue
+            notification_sent = risk_output_service.send_risk_notification(risk_storage_result)
+            
+            if notification_sent:
+                print(f"Risk notification sent for {risk_storage_result['entity_name']} "
+                      f"(Risk: {risk_storage_result['risk_level']})")
+                metrics.increment_counter('risk_notifications_sent')
+            else:
+                print(f"Failed to send risk notification for {risk_storage_result['entity_name']}")
+                metrics.increment_counter('risk_notification_failures')
+        
+        print(f"Stored {len(processed_results)} risk assessments in output table")
+        metrics.increment_counter('risk_assessments_stored')
+        
+    except Exception as e:
+        print(f"Failed to store risk assessments or send notifications: {e}")
+        metrics.increment_counter('risk_output_errors')
 
 def analyze_with_nova_llm(result: Dict, context: str) -> Dict:
     """Analyze single result with Nova LLM for comprehensive risk scoring"""

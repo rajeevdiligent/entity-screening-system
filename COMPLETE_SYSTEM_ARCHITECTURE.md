@@ -112,6 +112,59 @@
                                 │ │ - confidence    │ │
                                 │ └─────────────────┘ │
                                 └─────────────────────┘
+                                         │
+                                         │ Risk Scores
+                                         ▼
+                                ┌─────────────────────┐
+                                │  📊 Risk Output     │
+                                │    DynamoDB Table   │
+                                │                     │
+                                │ entity-risk-scores  │
+                                │                     │
+                                │ ┌─────────────────┐ │
+                                │ │ Risk Assessment │ │ ◄─── Structured output
+                                │ │ • Entity Name   │ │      for dashboards
+                                │ │ • Risk Level    │ │      and reporting
+                                │ │ • Risk Score    │ │      
+                                │ │ • Key Findings  │ │      GSI: EntityName
+                                │ │ • Confidence    │ │      GSI: RiskLevel
+                                │ └─────────────────┘ │
+                                │ TTL: 90 days        │
+                                └─────────────────────┘
+                                         │
+                                         │ Risk Notifications
+                                         ▼
+                                ┌─────────────────────┐
+                                │  📬 SQS Queue       │
+                                │  Risk Notifications │
+                                │                     │
+                                │ risk-notifications  │
+                                │                     │
+                                │ ┌─────────────────┐ │
+                                │ │ Notification    │ │ ◄─── Priority-based
+                                │ │ • Entity Name   │ │      notifications
+                                │ │ • Risk Level    │ │      High-risk alerts
+                                │ │ • Review Flag   │ │      Manual review
+                                │ │ • Timestamp     │ │      queue routing
+                                │ └─────────────────┘ │
+                                │ DLQ: 3 retries     │
+                                └─────────────────────┘
+                                         │
+                                         ▼
+                                ┌─────────────────────┐
+                                │  🔔 Notification    │
+                                │    Processor        │
+                                │                     │
+                                │ risk-notification-  │
+                                │ processor           │
+                                │                     │
+                                │ ┌─────────────────┐ │
+                                │ │ Alert Routing   │ │ ◄─── High-risk SNS
+                                │ │ • High Risk     │ │      Manual review
+                                │ │ • Manual Review │ │      queue routing
+                                │ │ • Dashboard     │ │      Dashboard API
+                                │ └─────────────────┘ │
+                                └─────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                        🔐 SECURITY & MONITORING LAYER                                   │
@@ -197,6 +250,12 @@
    ├─ Float→Decimal conversion
    └─ Store detailed risk assessment
 
+5. 🧠 LLM Service → 📊 Risk Output Table → 📬 SQS Notifications
+   ├─ Store structured risk assessments
+   ├─ Send priority-based notifications
+   ├─ Route high-risk alerts (SNS)
+   └─ Queue manual reviews
+
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                        🎯 SYSTEM CAPABILITIES                                           │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
@@ -209,12 +268,16 @@
    • Response caching and optimization
    • Structured vs. unstructured data sources
 
-✅ RISK ANALYSIS:
+✅ RISK ANALYSIS & OUTPUT:
    • Financial crimes detection (fraud, money laundering)
    • Corruption screening (bribery, graft)
    • Regulatory compliance checking
    • Reputational risk assessment
    • Confidence scoring (0-100%)
+   • Structured risk output table with GSI indexes
+   • Priority-based notification system
+   • High-risk alert routing (SNS)
+   • Manual review queue management
 
 ✅ TECHNICAL FEATURES:
    • Async processing for performance
