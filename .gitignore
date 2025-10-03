@@ -79,6 +79,9 @@ test_*.py
 *_test.py
 debug_*.py
 
+# Documentation and interaction logs
+prompts.txt
+
 # Secrets and Keys
 *.pem
 *.key
